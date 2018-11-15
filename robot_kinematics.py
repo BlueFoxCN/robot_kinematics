@@ -1,8 +1,13 @@
 import numpy as np
 import random
+from termcolor import colored
+
+eps_exp = 8
+eps = 1e-8
 
 def vecs_angle(vec1, vec2):
-    return np.arccos(np.dot(vec1, vec2) / np.linalg.norm(vec1) / np.linalg.norm(vec2))
+    cos_val = np.dot(vec1, vec2) / np.linalg.norm(vec1) / np.linalg.norm(vec2)
+    return np.arccos(np.around(cos_val, eps_exp))
 
 def angle2rad(angle):
     return angle * np.pi / 180
@@ -135,33 +140,31 @@ def inverse_kinematics(coord):
 
     def calculate_phi_3(D):
         cos_phi_3 = (D[0]**2 + D[1]**2 - d2**2 - d4**2) / (2 * d2 * d4)
-        phi_3 = np.arccos(cos_phi_3)
+        phi_3 = np.arccos(np.around(cos_phi_3, eps_exp))
         return [phi_3, -phi_3]
 
     phi_3_list = []
     for idx in range(len(D_list)):
         if idx % 2 == 0:
             cur_phi_3_list = calculate_phi_3(D_list[idx])
-            # if idx >= 2:
-            #     cur_phi_3_list = [-e for e in cur_phi_3_list]
             phi_3_list += cur_phi_3_list
 
-    def sin_phi_2(phi_3):
-        return -((d4 * np.cos(phi_3) + d2) * Dx + d4 * np.sin(phi_3) * Dy) / \
+    def sin_phi_2(phi_3, D):
+        return -((d4 * np.cos(phi_3) + d2) * D[0] + d4 * np.sin(phi_3) * D[1]) / \
                 ((d4 * np.cos(phi_3) + d2)**2 + d4**2 * np.sin(phi_3)**2)
 
     def cos_phi_2(phi_3, s_phi_2):
         return (Dy + d4 * np.sin(phi_3) * s_phi_2) / (d4 * np.cos(phi_3) + d2)
 
-    def calculate_phi_2(phi_3):
-        s_phi_2 = sin_phi_2(phi_3)
+    def calculate_phi_2(phi_3, D):
+        s_phi_2 = sin_phi_2(phi_3, D)
         c_phi_2 = cos_phi_2(phi_3, s_phi_2)
         phi_2 = np.arctan2(s_phi_2, c_phi_2)
         return phi_2
 
     phi_2_list = []
     for idx in range(len(phi_3_list)):
-        phi_2_list.append(calculate_phi_2(phi_3_list[idx]))
+        phi_2_list.append(calculate_phi_2(phi_3_list[idx], D_list[idx]))
 
     for idx in range(len(phi_2_list)):
         if idx >= 2:
@@ -193,17 +196,20 @@ def inverse_kinematics(coord):
         vec = np.cross(EB, AT)
 
         ang = vecs_angle(BA, vec)
-        phi_5 = np.arccos(cos_phi_5)
+        phi_5 = np.arccos(np.around(cos_phi_5, eps_exp))
 
         # if BA and vec are in the same direction, phi_5 is positive, else is negative
-        if abs(ang) > 0.001:
-            phi_5 = -phi_5
+        # if abs(ang) > 0.001:
+        #     phi_5 = -phi_5
 
         return phi_5
 
     phi_5_list = []
     for idx in range(len(E_list)):
-        phi_5_list.append(calculate_phi_5(E_list[idx], B_list[idx], A, tcp))
+        phi_5 = calculate_phi_5(E_list[idx], B_list[idx], A, tcp)
+        if idx >= 2:
+            phi_5 = -phi_5
+        phi_5_list.append(phi_5)
 
     # calculate point F's coordinate
     def calculate_F(A, B, E, phi_5):
@@ -219,43 +225,71 @@ def inverse_kinematics(coord):
     # calculate beta
     beta_list = []
     for idx in range(len(E_list)):
-        beta_list.append(np.arcsin((B_list[idx][2] - E_list[idx][2]) / d4))
+        sin_val = (B_list[idx][2] - E_list[idx][2]) / d4
+        beta = np.arcsin(np.around(sin_val, eps_exp))
+        '''
+        EB_angle = np.arctan2(B_list[idx][1] - E_list[idx][1], B_list[idx][0] - E_list[idx][0])
+        if (EB_angle - phi_1_list[idx] ) % (2 * np.pi) > 0.001 * np.pi:
+            beta = np.pi - beta
+        '''
+        beta_list.append(beta)
 
     # calculate point T_prime's coordinate
     def calculate_T_prime(A, F, phi_5, beta):
         T_prime_x = A[0] + (F[0] - A[0]) * d5 * np.cos(phi_5 + beta) / (d5 * np.cos(phi_5) * np.cos(beta))
         T_prime_y = A[1] + (F[1] - A[1]) * d5 * np.cos(phi_5 + beta) / (d5 * np.cos(phi_5) * np.cos(beta))
         T_prime_z = A[2] + d5 * np.sin(phi_5 + beta)
+
         return np.array([T_prime_x, T_prime_y, T_prime_z])
+
+    # import pdb
+    # pdb.set_trace()
 
     T_prime_list = []
     for idx in range(len(F_list)):
         T_prime_list.append(calculate_T_prime(A, F_list[idx], phi_5_list[idx], beta_list[idx]))
 
     # calculate phi_4
-    def calculate_phi_4(A, F, T, T_prime):
+    def calculate_phi_4(A, F, T, T_prime, phi_5):
         FT_prime = T_prime - F
         FT = T - F
+        FT_prime_len = np.linalg.norm(FT_prime)
+        FT_len = np.linalg.norm(FT)
+
+        if FT_prime_len < eps or FT_len < eps:
+            phi_4 = 0
+            return phi_4
+
         cos_phi_4 = np.dot(FT_prime, FT) / (np.linalg.norm(FT_prime) * np.linalg.norm(FT))
 
         AF = F - A
         vec = np.cross(FT, FT_prime)
 
         ang = vecs_angle(AF, vec)
-        phi_4 = np.arccos(cos_phi_4)
+        phi_4 = np.arccos(np.around(cos_phi_4, eps_exp))
 
         # if AF and vec are in the same direction, phi_4 is positive, else is negative
-        if abs(ang) < 0.001:
+        if abs(ang) < 0.001 and phi_5 <= np.pi / 2:
+            phi_4 = -phi_4
+        if abs(ang) > 0.001 and phi_5 > np.pi / 2:
             phi_4 = -phi_4
 
         return phi_4
 
     phi_4_list = []
     for idx in range(len(F_list)):
-        phi_4 = calculate_phi_4(A, F_list[idx], tcp, T_prime_list[idx])
+        phi_4 = calculate_phi_4(A, F_list[idx], tcp, T_prime_list[idx], phi_5_list[idx])
         if idx >= 2:
             phi_4 = norm_neg_pi_2_pos_pi(phi_4 + np.pi)
         phi_4_list.append(phi_4)
+
+    for idx in range(len(phi_4_list)):
+        if phi_4_list[idx] < -np.pi / 2:
+            phi_4_list[idx] += np.pi
+            phi_5_list[idx] = -phi_5_list[idx]
+        if phi_4_list[idx] > np.pi / 2:
+            phi_4_list[idx] -= np.pi
+            phi_5_list[idx] = -phi_5_list[idx]
 
     def list_rad2angle(rad_list):
         angle_list = [rad2angle(e) for e in rad_list]
@@ -267,32 +301,39 @@ def inverse_kinematics(coord):
     phi_4_angle_list = list_rad2angle(phi_4_list)
     phi_5_angle_list = list_rad2angle(phi_5_list)
 
-
     sol_list = []
     for idx in range(len(phi_1_angle_list)):
         sol_list.append(np.array([phi_1_angle_list[idx],
                                   phi_2_angle_list[idx],
                                   phi_3_angle_list[idx],
                                   phi_4_angle_list[idx],
-                                  phi_5_angle_list[idx]]))
+                                  phi_5_angle_list[idx],
+                                  0]))
 
-    print("solutions:")
-    for sol in sol_list:
-        print(np.around(sol, 3))
     return sol_list
 
 if __name__ == "__main__":
-    for idx in range(1):
+    for idx in range(100):
         print("Round %d" % idx)
         phi_angle_ary = [random.uniform(-160, 160),
-                         random.uniform(-70, 70),
-                         random.uniform(-120, 120),
-                         random.uniform(-120, 120),
+                         random.uniform(-90, 0),
+                         random.uniform(-90, 0),
                          random.uniform(-90, 90),
-                         random.uniform(-180, 180)]
-        phi_angle_ary = [94.354, 42.293, 27.137, 22.269, -45.978, 0]
+                         random.uniform(-90, 90),
+                         0]
         print(np.around(phi_angle_ary[:5], 3))
         ret = forward_kinematics(phi_angle_ary)
-        # print("tcp and direction:")
-        # print(np.around(ret, 3))
+        # print(ret[:3])
         sol_list = inverse_kinematics(np.array(ret))
+        correct = False
+        for sol in sol_list:
+            ret_prime = forward_kinematics(sol)
+            joint_error = np.sum(np.array(phi_angle_ary[:5]) - np.array(sol[:5]))
+            location_error = np.sum(ret[:3] - ret_prime[:3])
+            # print(ret_prime[:3])
+            if abs(joint_error) < 1e-3:
+                print(colored(str(np.around(location_error, 3)) + " " + str(np.around(sol, 3)), 'green', attrs=['bold']))
+            elif abs(location_error) < 1e-3:
+                print(colored(str(np.around(location_error, 3)) + " " + str(np.around(sol, 3)), 'green'))
+            else:
+                print(colored(str(np.around(location_error, 3)) + " " + str(np.around(sol, 3)), 'red'))
